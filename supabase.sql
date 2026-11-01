@@ -23,15 +23,19 @@ create table if not exists public.orders (
  payment_status text not null default 'Unpaid' check (payment_status in ('Unpaid','Paid')),
  created_at timestamptz not null default now()
 );
--- Admin allowlist: only authenticated Supabase Auth users whose phone is listed here can manage data.
+-- Admin allowlist: only explicitly approved email accounts can manage the shop.
 create table if not exists public.admin_users (
  user_id uuid primary key references auth.users(id) on delete cascade,
- phone text unique not null,
+ phone text unique,
+ email text unique,
  created_at timestamptz not null default now()
 );
+-- Migration-safe updates for projects that previously used phone OTP.
+alter table public.admin_users alter column phone drop not null;
+alter table public.admin_users add column if not exists email text;
 create or replace function public.is_shop_admin() returns boolean
 language sql stable security definer set search_path = '' as $$
- select exists(select 1 from public.admin_users a where a.user_id = (select auth.uid()));
+ select exists(select 1 from public.admin_users a where a.user_id = (select auth.uid()) and lower(a.email) = lower((select email from auth.users where id = (select auth.uid()))));
 $$;
 alter table public.products enable row level security;
 alter table public.orders enable row level security;
@@ -48,7 +52,7 @@ drop policy if exists "Admins update orders" on public.orders;
 create policy "Admins update orders" on public.orders for update using (public.is_shop_admin()) with check (public.is_shop_admin());
 drop policy if exists "Admins view own admin row" on public.admin_users;
 create policy "Admins view own admin row" on public.admin_users for select using (user_id = (select auth.uid()));
--- Add your own admin user after the first successful OTP login:
--- insert into public.admin_users (user_id, phone)
--- select id, phone from auth.users where phone = '+919801265197';
+-- After creating your admin user in Authentication > Users, approve its exact email:
+-- insert into public.admin_users (user_id, email)
+-- select id, email from auth.users where lower(email) = lower('YOUR-ADMIN-EMAIL@example.com');
 -- IMPORTANT: Keep the anon/publishable key in the frontend; NEVER expose service_role keys.
